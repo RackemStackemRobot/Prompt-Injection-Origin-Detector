@@ -3,23 +3,33 @@ import json
 
 
 INJECTION_PATTERNS = [
-    "ignore previous instructions",
-    "disregard previous instructions",
-    "reveal the system prompt",
-    "you are now the system",
-    "act as the system",
-    "bypass safety",
-    "override the system",
+    ("ignore previous instructions", 40),
+    ("disregard previous instructions", 40),
+    ("reveal the system prompt", 50),
+    ("you are now the system", 35),
+    ("act as the system", 35),
+    ("override the system", 35),
+    ("bypass safety", 35),
+    ("developer message", 20),
+    ("system prompt", 15),
 ]
 
 
-def contains_injection(text: str) -> list[str]:
-    text_l = text.lower()
+def find_hits(text: str):
+    text_l = (text or "").lower()
     hits = []
-    for p in INJECTION_PATTERNS:
-        if p in text_l:
-            hits.append(p)
+    for pattern, weight in INJECTION_PATTERNS:
+        if pattern in text_l:
+            hits.append((pattern, weight))
     return hits
+
+
+def clamp(n: int, lo: int, hi: int) -> int:
+    if n < lo:
+        return lo
+    if n > hi:
+        return hi
+    return n
 
 
 def main() -> int:
@@ -41,53 +51,87 @@ def main() -> int:
             except json.JSONDecodeError:
                 continue
 
-    # Sort by step just in case the file is out of order
     events.sort(key=lambda e: e.get("step", 0))
 
+    # Collect hits and find first appearance
+    first_hit = None
+    step_hits = []
+    unique_patterns = set()
+    total_weight = 0
+
+    for e in events:
+        preview = e.get("preview", "")
+        hits = find_hits(preview)
+
+        if hits:
+            step_hits.append((e, hits))
+            for p, w in hits:
+                unique_patterns.add(p)
+                total_weight += w
+
+            if first_hit is None:
+                first_hit = (e, hits)
+
+    # Risk score: base on total weights + propagation
+    propagation_bonus = 10 * max(0, len(step_hits) - 1)
+    risk = clamp(total_weight + propagation_bonus, 0, 100)
+
     print("")
-    print("Prompt Injection Origin Detector (MVP)")
+    print("Prompt Injection Origin Detector")
     print(f"Events loaded: {len(events)}")
     print("")
 
-    first_hit = None
-
-    for e in events:
-        preview = e.get("preview", "")
-        hits = contains_injection(preview)
-        if hits and first_hit is None:
-            first_hit = {
-                "trace_id": e.get("trace_id"),
-                "step": e.get("step"),
-                "source": e.get("source"),
-                "component": e.get("component"),
-                "patterns": hits,
-                "preview": preview,
-            }
-
     if first_hit:
-        print("Injection detected")
+        origin_event, origin_hits = first_hit
+
+        print("Summary")
+        print("------")
+        print(f"Risk score: {risk}/100")
+        print(f"Signals found: {len(unique_patterns)} pattern(s)")
+        print(f"Propagation: {len(step_hits)} step(s) contained injection signals")
         print("")
-        print(f"First seen at step {first_hit['step']}")
-        print(f"Source: {first_hit['source']}")
-        print(f"Component: {first_hit['component']}")
-        print(f"Patterns: {', '.join(first_hit['patterns'])}")
+        print("Origin")
+        print("------")
+        print(f"Trace: {origin_event.get('trace_id')}")
+        print(f"First seen at step: {origin_event.get('step')}")
+        print(f"Source: {origin_event.get('source')}")
+        print(f"Component: {origin_event.get('component')}")
+        print(f"Patterns: {', '.join([p for p, _w in origin_hits])}")
         print("")
-        print("Preview:")
-        print(first_hit["preview"][:200])
+        print("Origin preview")
+        print("--------------")
+        print((origin_event.get("preview") or "")[:240])
         print("")
     else:
+        print("Summary")
+        print("------")
         print("No injection patterns detected.")
+        print("Risk score: 0/100")
         print("")
+        print("Timeline")
+        print("--------")
+        for e in events:
+            step = e.get("step")
+            source = e.get("source")
+            component = e.get("component")
+            print(f"- step {step} source={source} component={component}")
+        print("")
+        return 0
 
-    print("Timeline:")
+    print("Timeline")
+    print("--------")
     for e in events:
+        preview = e.get("preview", "")
+        hits = find_hits(preview)
         step = e.get("step")
         source = e.get("source")
         component = e.get("component")
-        preview = e.get("preview", "")
-        hits = contains_injection(preview)
-        marker = " <== injection appears here" if hits else ""
-        print(f"- step {step} source={source} component={component}{marker}")
+
+        if hits:
+            patterns = ", ".join([p for p, _w in hits])
+            print(f"- step {step} source={source} component={component}  HIT: {patterns}")
+        else:
+            print(f"- step {step} source={source} component={component}")
 
     print("")
     return 0
