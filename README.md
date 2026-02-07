@@ -92,6 +92,42 @@ JSON output includes:
 - Multiple sources introducing the same injection may result in ties  
 - Accuracy depends on trace completeness
 
+## Runtime requirements (important)
+
+This tool does not magically detect prompt injection origin by itself.  
+It requires that your agent pipeline emit trace logs at runtime.
+
+At minimum, your system must log:
+
+- raw user input before any modification  
+- each retrieval (RAG) chunk before it is merged into context  
+- each tool output before it is injected into the prompt  
+- agent-to-agent messages before consumption  
+- the final assembled model input  
+
+Each log entry should include:
+
+- trace_id  
+- step number  
+- source (user | retrieval | memory | tool | agent | llm_call)  
+- component name  
+- preview (short human-readable snippet of the text)  
+
+Without step-level logging, origin attribution is not possible.  
+This tool is designed to analyze trace logs, not to infer causality from final prompts.
+
+### Example instrumentation (conceptual)
+
+```python
+trace_logger.emit(
+    trace_id=trace_id,
+    step=2,
+    source="retrieval",
+    component="rag_retriever",
+    preview=doc_chunk[:160],
+)
+```
+
 ## License
 
 MIT
