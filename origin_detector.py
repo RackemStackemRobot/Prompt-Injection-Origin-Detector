@@ -35,6 +35,7 @@ def clamp(n: int, lo: int, hi: int) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Prompt Injection Origin Detector (MVP)")
     ap.add_argument("--trace", required=True, help="Path to JSONL trace file")
+    ap.add_argument("--out", required=False, help="Optional path to write JSON report")
     args = ap.parse_args()
 
     events = []
@@ -53,7 +54,6 @@ def main() -> int:
 
     events.sort(key=lambda e: e.get("step", 0))
 
-    # Collect hits and find first appearance
     first_hit = None
     step_hits = []
     unique_patterns = set()
@@ -72,7 +72,6 @@ def main() -> int:
             if first_hit is None:
                 first_hit = (e, hits)
 
-    # Risk score: base on total weights + propagation
     propagation_bonus = 10 * max(0, len(step_hits) - 1)
     risk = clamp(total_weight + propagation_bonus, 0, 100)
 
@@ -81,8 +80,26 @@ def main() -> int:
     print(f"Events loaded: {len(events)}")
     print("")
 
+    report = {
+        "events_loaded": len(events),
+        "risk_score": risk,
+        "signals_found": sorted(list(unique_patterns)),
+        "propagation_steps": [],
+        "origin": None,
+        "timeline": [],
+    }
+
     if first_hit:
         origin_event, origin_hits = first_hit
+
+        report["origin"] = {
+            "trace_id": origin_event.get("trace_id"),
+            "step": origin_event.get("step"),
+            "source": origin_event.get("source"),
+            "component": origin_event.get("component"),
+            "patterns": [p for p, _w in origin_hits],
+            "preview": (origin_event.get("preview") or "")[:240],
+        }
 
         print("Summary")
         print("------")
@@ -108,15 +125,6 @@ def main() -> int:
         print("No injection patterns detected.")
         print("Risk score: 0/100")
         print("")
-        print("Timeline")
-        print("--------")
-        for e in events:
-            step = e.get("step")
-            source = e.get("source")
-            component = e.get("component")
-            print(f"- step {step} source={source} component={component}")
-        print("")
-        return 0
 
     print("Timeline")
     print("--------")
@@ -127,13 +135,29 @@ def main() -> int:
         source = e.get("source")
         component = e.get("component")
 
+        timeline_item = {
+            "step": step,
+            "source": source,
+            "component": component,
+            "hit_patterns": [p for p, _w in hits],
+        }
+        report["timeline"].append(timeline_item)
+
         if hits:
             patterns = ", ".join([p for p, _w in hits])
             print(f"- step {step} source={source} component={component}  HIT: {patterns}")
+            report["propagation_steps"].append(step)
         else:
             print(f"- step {step} source={source} component={component}")
 
     print("")
+
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as out_f:
+            json.dump(report, out_f, indent=2)
+        print(f"Wrote JSON report to: {args.out}")
+        print("")
+
     return 0
 
 
